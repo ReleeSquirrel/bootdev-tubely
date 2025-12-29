@@ -4,6 +4,7 @@ import { getVideo, updateVideo } from "../db/videos";
 import type { ApiConfig } from "../config";
 import type { BunRequest } from "bun";
 import { BadRequestError, NotFoundError, UserForbiddenError } from "./errors";
+import path from "path";
 
 export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
   const { videoId } = req.params as { videoId?: string };
@@ -30,21 +31,23 @@ export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
   // Get thumbnail media type
   const mediaType = thumbnail.type;
 
+  if (!(mediaType === "image/jpeg" || mediaType === "image/png")) throw new BadRequestError(`Bad File Type.`);
+
   // Get thumbnail data
   const thumbnailData = await thumbnail.arrayBuffer();
 
-  // Convert the thumbnail data into a base64 string for insertion into the database
-  const thumbnailDataBuffer = Buffer.from(thumbnailData);
-  const thumbnailDataString = thumbnailDataBuffer.toString("base64");
-  const thumbnailDataUrl = `data:${mediaType};base64,${thumbnailDataString}`;
+  // Save the thumbnail to the file system
+  const fileName = `${videoId}.${thumbnail.type.slice(thumbnail.type.indexOf("/") + 1)}`;
+  const filePath = path.join(cfg.assetsRoot, fileName);
+  Bun.write(filePath, thumbnailData);
 
   // Get and validate the metadata of the video
   const videoMetadata = getVideo(cfg.db, videoId);
-  if (!videoMetadata) throw new BadRequestError("Video not found.");
+  if (!videoMetadata) throw new NotFoundError("Video not found.");
   if (videoMetadata.userID !== userID) throw new UserForbiddenError("Forbidden.");
 
   // Update metadata
-  videoMetadata.thumbnailURL = thumbnailDataUrl;
+  videoMetadata.thumbnailURL = `http://localhost:${cfg.port}/assets/${fileName}`;
 
   // Update video record in database
   updateVideo(cfg.db, videoMetadata);
