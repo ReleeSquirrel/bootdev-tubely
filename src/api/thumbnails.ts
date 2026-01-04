@@ -18,7 +18,7 @@ export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
 
   console.log("uploading thumbnail for video", videoId, "by user", userID);
 
-  // Upload the Thumbnail
+  // Get the Thumbnail from the form data
   const formData = await req.formData();
   const thumbnail = formData.get("thumbnail");
 
