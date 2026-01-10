@@ -7,7 +7,6 @@ import { getBearerToken, validateJWT } from "../auth";
 import { getVideo, updateVideo } from "../db/videos";
 import path from "path";
 import { randomBytes } from "crypto";
-import { config } from "process";
 
 export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
   const MAX_UPLOAD_SIZE = 1 << 30;
@@ -45,14 +44,18 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
   const filePath = path.join(cfg.assetsRoot, fileName);
   await Bun.write(filePath, video);
 
+  // Get the thumbnail's aspect ratio
+  const aspectRatio = await getVideoAspectRatio(filePath);
+  const fileNameWithAspectRatio = `${aspectRatio}/${fileName}`;
+
   // Write the file to S3
-  const fileOnS3: S3File = cfg.s3Client.file(fileName);
+  const fileOnS3: S3File = cfg.s3Client.file(fileNameWithAspectRatio);
   await fileOnS3.write(Bun.file(filePath), {
     type: video.type,
   });
 
   // Update the videoMetaData with the S3 URL for the file
-  videoMetadata.videoURL = `https://${cfg.s3Bucket}.s3.${cfg.s3Region}.amazonaws.com/${fileName}`;
+  videoMetadata.videoURL = `https://${cfg.s3Bucket}.s3.${cfg.s3Region}.amazonaws.com/${fileNameWithAspectRatio}`;
 
   // Update video record in database
   updateVideo(cfg.db, videoMetadata);
@@ -61,4 +64,52 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
   await Bun.file(filePath).delete();
 
   return respondWithJSON(200, null);
+}
+
+export async function getVideoAspectRatio(filePath: string) {
+  // Run ffprobe on the file at filePath and aquire the results
+  const subprocess = Bun.spawn(["ffprobe", "-v", "error", "-select_streams",
+    "v:0", "-show_entries", "stream=width,height", "-of", "json", filePath], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  // Handle Errors
+  if (await subprocess.exited != 0) {
+    const errorText = await new Response(subprocess.stderr).text();
+    throw new Error(errorText);
+  }
+
+  // Find and return Aspect Ratio
+  const outputText = await new Response(subprocess.stdout).text();
+  const parsedOutputText = JSON.parse(outputText);
+  if (typeof parsedOutputText !== "object" ||
+    parsedOutputText === null ||
+    typeof parsedOutputText.streams !== "object"
+  ) throw new Error(`Video metadata JSON doesn't match expected format.`);
+
+  const streamZero = parsedOutputText.streams[0];
+  if (typeof streamZero.width !== "number" ||
+    typeof streamZero.height !== "number"
+  ) throw new Error(`Video metadata JSON doesn't match expected format.`);
+
+  /* function getGreatestCommonDenominator(a: number, b: number): number {
+    return b === 0 ? a : getGreatestCommonDenominator(b, a % b);
+  };
+
+  const gcd = streamZero.height > streamZero.width ?
+  getGreatestCommonDenominator(streamZero.height, streamZero.width):
+  getGreatestCommonDenominator(streamZero.width, streamZero.height);
+  const aspectRatio = (streamZero.height / gcd) / (streamZero.width / gcd); */
+
+  const aspectRatio = streamZero.height / streamZero.width;
+  const portrait = 16 / 9; // 1.777777777777778
+  const landscape = 9 / 16; // 0.5625
+  const tolerance = 0.01;
+
+
+
+  if (Math.abs(aspectRatio - portrait) < tolerance) return "portrait";
+  if (Math.abs(aspectRatio - landscape) < tolerance) return "landscape";
+  return "other";
 }
