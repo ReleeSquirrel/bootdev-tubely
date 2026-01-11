@@ -8,7 +8,7 @@ import { getVideo, updateVideo } from "../db/videos";
 import path from "path";
 import { randomBytes } from "crypto";
 
-export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
+export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest): Promise<Response> {
   const MAX_UPLOAD_SIZE = 1 << 30;
 
   const { videoId } = req.params as { videoId?: string };
@@ -32,25 +32,31 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
   // Check if video is a File
   if (!(video instanceof File)) throw new BadRequestError("Thumbnail was not a File.");
 
-  // Check if thumbnail is too big
+  // Check if video file is too big
   if (video.size > MAX_UPLOAD_SIZE) throw new BadRequestError("Thumbnail file size is too big.");
 
   // Get video media type
   const mediaType = video.type;
   if (!(mediaType === "video/mp4")) throw new BadRequestError(`Bad File Type.`);
 
-  // Temporarily save the thumbnail to the file system
+  // Temporarily save the video to the file system
   const fileName = `${randomBytes(32).toString("base64url")}.${video.type.slice(video.type.indexOf("/") + 1)}`;
   const filePath = path.join(cfg.assetsRoot, fileName);
   await Bun.write(filePath, video);
 
-  // Get the thumbnail's aspect ratio
-  const aspectRatio = await getVideoAspectRatio(filePath);
+  // Create a faststart processed copy of the file
+  const processedFilePath = await processVideoForFastStart(filePath);
+
+  // Delete the original temporary file
+  await Bun.file(filePath).delete();
+
+  // Get the video's aspect ratio
+  const aspectRatio = await getVideoAspectRatio(processedFilePath);
   const fileNameWithAspectRatio = `${aspectRatio}/${fileName}`;
 
-  // Write the file to S3
+  // Write the video file to S3
   const fileOnS3: S3File = cfg.s3Client.file(fileNameWithAspectRatio);
-  await fileOnS3.write(Bun.file(filePath), {
+  await fileOnS3.write(Bun.file(processedFilePath), {
     type: video.type,
   });
 
@@ -60,13 +66,13 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
   // Update video record in database
   updateVideo(cfg.db, videoMetadata);
 
-  // Remove the temporary file from the file system
-  await Bun.file(filePath).delete();
+  // Remove the processed temporary file from the file system
+  await Bun.file(processedFilePath).delete();
 
   return respondWithJSON(200, null);
 }
 
-export async function getVideoAspectRatio(filePath: string) {
+export async function getVideoAspectRatio(filePath: string): Promise<"portrait" | "landscape" | "other"> {
   // Run ffprobe on the file at filePath and aquire the results
   const subprocess = Bun.spawn(["ffprobe", "-v", "error", "-select_streams",
     "v:0", "-show_entries", "stream=width,height", "-of", "json", filePath], {
@@ -80,7 +86,9 @@ export async function getVideoAspectRatio(filePath: string) {
     throw new Error(errorText);
   }
 
-  // Find and return Aspect Ratio
+  // Find and return the Aspect Ratio from ffprobe output
+
+  // Parse and validate ffprobe output
   const outputText = await new Response(subprocess.stdout).text();
   const parsedOutputText = JSON.parse(outputText);
   if (typeof parsedOutputText !== "object" ||
@@ -93,23 +101,32 @@ export async function getVideoAspectRatio(filePath: string) {
     typeof streamZero.height !== "number"
   ) throw new Error(`Video metadata JSON doesn't match expected format.`);
 
-  /* function getGreatestCommonDenominator(a: number, b: number): number {
-    return b === 0 ? a : getGreatestCommonDenominator(b, a % b);
-  };
-
-  const gcd = streamZero.height > streamZero.width ?
-  getGreatestCommonDenominator(streamZero.height, streamZero.width):
-  getGreatestCommonDenominator(streamZero.width, streamZero.height);
-  const aspectRatio = (streamZero.height / gcd) / (streamZero.width / gcd); */
-
+  // Calculate Aspect Ratio type and return it as a text string
   const aspectRatio = streamZero.height / streamZero.width;
   const portrait = 16 / 9; // 1.777777777777778
   const landscape = 9 / 16; // 0.5625
   const tolerance = 0.01;
 
-
-
   if (Math.abs(aspectRatio - portrait) < tolerance) return "portrait";
   if (Math.abs(aspectRatio - landscape) < tolerance) return "landscape";
   return "other";
+}
+
+export async function processVideoForFastStart(inputFilePath: string): Promise<string> {
+  const outputFilePath: string = `${inputFilePath}.processed`;
+
+  const subprocess = Bun.spawn(["ffmpeg", "-i", inputFilePath, "-movflags", "faststart", "-map_metadata",
+    "0", "-codec", "copy", "-f", "mp4", outputFilePath], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  // Handle Errors
+  const exitCode = await subprocess.exited
+  if (exitCode !== 0) {
+    const errorText = await new Response(subprocess.stderr).text();
+    throw new Error(`ffmpeg failed: ${errorText}`);
+  }
+
+  return outputFilePath;
 }
