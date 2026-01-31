@@ -61,7 +61,7 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest): Promi
   });
 
   // Update the videoMetaData with the S3 URL for the file
-  videoMetadata.videoURL = `${fileNameWithAspectRatio}`;
+  videoMetadata.videoURL = `${cfg.s3CfDistribution}/${fileNameWithAspectRatio}`;
 
   // Update video record in database
   updateVideo(cfg.db, videoMetadata);
@@ -69,9 +69,7 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest): Promi
   // Remove the processed temporary file from the file system
   await Bun.file(processedFilePath).delete();
 
-  const resultVideo = dbVideoToSignedVideo(cfg, videoMetadata);
-
-  return respondWithJSON(200, resultVideo);
+  return respondWithJSON(200, videoMetadata);
 }
 
 export async function getVideoAspectRatio(filePath: string): Promise<"portrait" | "landscape" | "other"> {
@@ -131,20 +129,4 @@ export async function processVideoForFastStart(inputFilePath: string): Promise<s
   }
 
   return outputFilePath;
-}
-
-export async function generatePresignedURL(cfg: ApiConfig, key: string, expireTime: number) {
-  const result = cfg.s3Client.presign(key, {
-    expiresIn: expireTime
-  });
-
-  if (!result) throw new Error(`No presigned url received!`);
-  return result;
-}
-
-export async function dbVideoToSignedVideo(cfg: ApiConfig, video: Video) {
-  const resultVideo = video;
-  if (!video.videoURL) return video;
-  resultVideo.videoURL = await generatePresignedURL(cfg, video.videoURL, 3600);
-  return resultVideo;
 }
