@@ -2,6 +2,13 @@
 
 This repo contains the starter code for the Tubely application - the #1 tool for engagement bait - for the "Learn File Servers and CDNs with S3 and CloudFront" [course](https://www.boot.dev/courses/learn-file-servers-s3-cloudfront-typescript) on [boot.dev](https://www.boot.dev)
 
+## Important Note!!!
+
+This repo has been completed in accordance with the course on Boot.dev, and is fully functional in that respect, however it was not meant to be used outside of the lesson. It has none of the essential data that was stored in the .env file, and the AWS account it was used with has been shut down.
+
+If you're looking for examples of my (ReleeSquirrel's) work, you'd be better served looking at the other repos. If you're looking for the actual origin of this lesson, it should retain information on the repo it was forked from. Otherwise, visit https://www.boot.dev
+
+
 ## Quickstart
 
 *This is to be used as a *reference\* in case you need it, you should follow the instructions in the course rather than trying to do everything here.
